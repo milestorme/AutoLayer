@@ -872,6 +872,16 @@ end
 
 function AutoLayer:ProcessRosterUpdate()
 	self:getCurrentLayer()
+	-- Remove pending invites for players who have actually joined the group.
+	-- ERR_JOINED_GROUP_S doesn't fire reliably on cross-realm/anniversary servers,
+	-- so GROUP_ROSTER_UPDATE is the robust fallback to prevent double-counting.
+	for i = #pendingPlayerInvites, 1, -1 do
+		local entry = pendingPlayerInvites[i]
+		if UnitInRaid(entry.name) or UnitInParty(entry.name) then
+			self:DebugPrint("Removing ", entry.name, " from pending invites, reason: joined group (roster update)")
+			table.remove(pendingPlayerInvites, i)
+		end
+	end
 end
 
 AutoLayer:RegisterEvent("CHAT_MSG_CHANNEL", "ProcessMessage")
