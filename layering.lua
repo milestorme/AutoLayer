@@ -388,6 +388,34 @@ C_Timer.After(0.1, function()
 	CleanupOldLayerChannels()
 end)
 
+local function trackPendingInvite(name)
+	pendingInviteNonce = pendingInviteNonce + 1
+	local inviteNonce = pendingInviteNonce
+	local inviteTimestamp = time()
+	local updatedPending = false
+	for _, entry in ipairs(pendingPlayerInvites) do
+		if entry.name == name then
+			entry.time = inviteTimestamp
+			entry.nonce = inviteNonce
+			updatedPending = true
+			break
+		end
+	end
+	if not updatedPending then
+		table.insert(pendingPlayerInvites, { name = name, time = inviteTimestamp, nonce = inviteNonce })
+	end
+	AutoLayer:DebugPrint("Tracking ", name, " in pending invites")
+	C_Timer.After(CACHE_TTL_PENDING, function()
+		for i, entry in ipairs(pendingPlayerInvites) do
+			if entry.name == name and entry.nonce == inviteNonce then
+				AutoLayer:DebugPrint("Removing ", name, " from pending invites, reason: invite timed out")
+				table.remove(pendingPlayerInvites, i)
+				break
+			end
+		end
+	end)
+end
+
 local function enqueueKickTarget(name)
 	if not name then
 		return
@@ -657,6 +685,8 @@ function AutoLayer:ProcessMessage(
 		end
 		table.insert(recentLayerRequests, { name = name_without_realm, time = time() })
 		self:DebugPrint("Added", name_without_realm, "to list of recent layer requests")
+		-- Track as pending immediately — ERR_INVITE_PLAYER_S may not fire for cross-realm invites
+		trackPendingInvite(name_without_realm)
 	else
 		self:DebugPrint("Group is already full (", current_group_size, "in group +", #pendingPlayerInvites, "pending invites). Cannot invite", name_without_realm)
 	end
@@ -761,33 +791,8 @@ function AutoLayer:ProcessSystemMessages(_, SystemMessages)
 		local playerNameWithoutRealm = removeRealmName(characterName)
 		self:DebugPrint("ERR_INVITE_PLAYER_S", playerNameWithoutRealm, "found !")
 
-		-- Player was invited, add/update pending invite entry
-		local inviteTimestamp = time()
-		pendingInviteNonce = pendingInviteNonce + 1
-		local inviteNonce = pendingInviteNonce
-		local updatedPending = false
-		for _, entry in ipairs(pendingPlayerInvites) do
-			if entry.name == playerNameWithoutRealm then
-				entry.time = inviteTimestamp
-				entry.nonce = inviteNonce
-				updatedPending = true
-				break
-			end
-		end
-		if not updatedPending then
-			table.insert(pendingPlayerInvites, { name = playerNameWithoutRealm, time = inviteTimestamp, nonce = inviteNonce })
-		end
-		self:DebugPrint("Tracking ", playerNameWithoutRealm, " in pending invites")
-		-- Set a timer for 3 minutes, if after that time they are still in pending invites, remove them and consider the invite timed out
-		C_Timer.After(CACHE_TTL_PENDING, function()
-			for i, entry in ipairs(pendingPlayerInvites) do
-				if entry.name == playerNameWithoutRealm and entry.nonce == inviteNonce then
-					self:DebugPrint("Removing ", playerNameWithoutRealm, " from pending invites, reason: invite timed out")
-					table.remove(pendingPlayerInvites, i)
-					break -- Found the player, no need to continue checking
-				end
-			end
-		end)
+		-- Refresh pending tracking (may already be tracked from InviteUnit call; upsert is safe)
+		trackPendingInvite(playerNameWithoutRealm)
 
 		if self.db.profile.inviteWhisper then
 			local currentLayer = AutoLayer:getCurrentLayer()
